@@ -1,3 +1,4 @@
 Flask
 telethon
 gunicorn
+yt-dlp
