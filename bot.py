@@ -9,7 +9,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # Telegram Bot API Token
-TELEGRAM_API_TOKEN = 'YOUR_TELEGRAM_API_TOKEN'
+TELEGRAM_API_TOKEN = '8273826418:AAGUG6t6RsZGihebloztt3w7OFOBQXPbN9M'
 
 # Function to download YouTube videos
 def download_youtube_video(url: str) -> str:
