@@ -80,7 +80,7 @@ async def handler(event):
     elif "youtube.com" in message_text or "youtu.be" in message_text:
         url = message_text
     else:
-        await event.respond("👋 Send a YouTube link or use /yt <url>")
+        await event.respond("👋 Hello there! Send me a YouTube link to get started.")
         return
 
     await event.respond("⏳ Fetching available qualities...")
@@ -116,10 +116,15 @@ async def callback(event):
         user_choices.pop(sender_id, None)
 
 # --- Start Telegram bot ---
-def start_bot():
-    asyncio.run(bot.start(bot_token=BOT_TOKEN))
+async def bot_main():
+    await bot.start(bot_token=BOT_TOKEN)
     print("✅ Bot connected and ready!")
-    asyncio.run(bot.run_until_disconnected())
+    await bot.run_until_disconnected()
+
+def start_bot():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(bot_main())
 
 # --- Entry point ---
 if __name__ == "__main__":
