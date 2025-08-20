@@ -11,6 +11,7 @@ app = Flask(__name__)
 def home():
     return "Telethon bot is running!"
 
+# --- Telegram bot setup ---
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -29,7 +30,7 @@ def download_video(url):
     filename = os.path.join('downloads', info.get('title') + '.' + info.get('ext'))
     return filename
 
-# Event handler for new messages
+# --- Event handler for new messages ---
 @bot.on(events.NewMessage)
 async def handler(event):
     message_text = event.raw_text
@@ -38,16 +39,17 @@ async def handler(event):
         await event.respond("⏳ Downloading...")
         try:
             filename = download_video(url)
-            # Send the video to Telegram
             await event.respond(file=filename)
-            # Delete the video after sending
             os.remove(filename)
             await event.respond(f"✅ Uploaded and deleted: {os.path.basename(filename)}")
+        except yt_dlp.utils.DownloadError as e:
+            await event.respond(f"❌ Download failed: Invalid URL or unavailable video.\nDetails: {str(e)}")
         except Exception as e:
-            await event.respond(f"❌ Error: {str(e)}")
+            await event.respond(f"❌ Something went wrong: {str(e)}")
     else:
         await event.respond("hello there")
 
+# --- Run bot in background thread ---
 def run_bot():
     print("Starting bot thread...")
     loop = asyncio.new_event_loop()
