@@ -2,8 +2,8 @@ from flask import Flask
 from telethon import TelegramClient, events
 import os
 import threading
+import asyncio
 
-# Flask app (to keep Render web service alive)
 app = Flask(__name__)
 
 @app.route("/")
@@ -22,7 +22,9 @@ async def handler(event):
     await event.respond("hello there")
 
 def run_bot():
-    print("Bot started...")
+    print("Bot starting...")
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     bot.run_until_disconnected()
 
 # Run Telethon in a background thread
