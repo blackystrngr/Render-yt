@@ -1,9 +1,10 @@
 from flask import Flask
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, Button
 import os
 import threading
 import asyncio
-import yt_dlp
+import subprocess
+import shlex
 
 app = Flask(__name__)
 
@@ -18,45 +19,98 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 bot = TelegramClient("bot_session", API_ID, API_HASH)
 
-# --- Helper function to download video ---
-def download_video(url):
-    ydl_opts = {
-        'outtmpl': 'downloads/%(title)s.%(ext)s',
-        'quiet': True,
-        'noplaylist': True,  # download single video only
-    }
+# --- Helper: get available formats ---
+def get_formats(url):
+    cmd = f"yt-dlp --cookies cookies.txt --list-formats {shlex.quote(url)}"
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise Exception(result.stderr)
+    formats = []
+    for line in result.stdout.splitlines():
+        if line.strip().startswith("format code"):
+            continue
+        if line.strip() and line[0].isdigit():
+            parts = line.split()
+            format_code = parts[0]
+            resolution = parts[1] if len(parts) > 1 else format_code
+            formats.append((format_code, resolution))
+    return formats
 
-    # Use cookies from browser if available, else use cookies.txt
-    if os.path.exists('cookies.txt'):
-        ydl_opts['cookies'] = 'cookies.txt'
+# --- Helper: download video in specific format ---
+def download_video(url, format_code):
+    if not os.path.exists("downloads"):
+        os.makedirs("downloads")
+    output_template = "downloads/%(title)s.%(ext)s"
+    cmd = [
+        "yt-dlp", "--cookies", "cookies.txt",
+        "-f", format_code,
+        "-o", output_template,
+        url
+    ]
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    for line in process.stdout:
+        yield line  # streaming download progress
+    process.wait()
+    if process.returncode != 0:
+        raise Exception("Download failed.")
+    # find downloaded file
+    files = os.listdir("downloads")
+    if files:
+        return os.path.join("downloads", files[0])
     else:
-        # Attempt to read from Chrome browser (works locally)
-        ydl_opts['cookies_from_browser'] = ('chrome',)
+        raise Exception("Downloaded file not found.")
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+# --- Event handler ---
+user_choices = {}  # track which user chose which URL
 
-    filename = os.path.join('downloads', info.get('title') + '.' + info.get('ext'))
-    return filename
-
-# --- Event handler for new messages ---
 @bot.on(events.NewMessage)
 async def handler(event):
     message_text = event.raw_text
     if message_text.startswith("/yt "):
         url = message_text[4:].strip()
-        await event.respond("⏳ Downloading...")
         try:
-            filename = download_video(url)
+            await event.respond("⏳ Fetching available qualities...")
+            formats = get_formats(url)
+            if not formats:
+                await event.respond("❌ No formats found.")
+                return
+            buttons = [Button.inline(f"{res}", data=fc) for fc, res in formats[:10]]  # limit 10 choices
+            user_choices[event.sender_id] = url
+            await event.respond("Select a quality:", buttons=buttons)
+        except Exception as e:
+            await event.respond(f"❌ Failed to fetch formats: {str(e)}")
+    else:
+        await event.respond("hello there")
+
+# --- Button handler ---
+@bot.on(events.CallbackQuery)
+async def callback(event):
+    format_code = event.data.decode()
+    user_id = event.sender_id
+    url = user_choices.get(user_id)
+    if not url:
+        await event.answer("❌ No URL found. Send /yt <url> first.")
+        return
+    await event.edit(f"⏳ Downloading in format {format_code}...")
+    try:
+        # Stream download progress
+        for line in download_video(url, format_code):
+            if "Downloading" in line or "ETA" in line:
+                await event.edit(f"⏳ {line.strip()}")
+        # Send the file
+        files = os.listdir("downloads")
+        if files:
+            filename = os.path.join("downloads", files[0])
             await event.respond(file=filename)
             os.remove(filename)
             await event.respond(f"✅ Uploaded and deleted: {os.path.basename(filename)}")
-        except yt_dlp.utils.DownloadError as e:
-            await event.respond(f"❌ Download failed: Invalid URL or video requires login/cookies.\nDetails: {str(e)}")
-        except Exception as e:
-            await event.respond(f"❌ Something went wrong: {str(e)}")
-    else:
-        await event.respond("hello there")
+        else:
+            await event.respond("❌ Downloaded file not found.")
+    except Exception as e:
+        await event.edit(f"❌ Error: {str(e)}")
+    finally:
+        if user_id in user_choices:
+            del user_choices[user_id]
 
 # --- Run bot in background thread ---
 def run_bot():
@@ -70,6 +124,4 @@ def run_bot():
 threading.Thread(target=run_bot, daemon=True).start()
 
 if __name__ == "__main__":
-    if not os.path.exists("downloads"):
-        os.makedirs("downloads")
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
