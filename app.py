@@ -22,11 +22,20 @@ bot = TelegramClient("bot_session", API_ID, API_HASH)
 def download_video(url):
     ydl_opts = {
         'outtmpl': 'downloads/%(title)s.%(ext)s',
-        'cookies': 'cookies.txt',
-        'quiet': True
+        'quiet': True,
+        'noplaylist': True,  # download single video only
     }
+
+    # Use cookies from browser if available, else use cookies.txt
+    if os.path.exists('cookies.txt'):
+        ydl_opts['cookies'] = 'cookies.txt'
+    else:
+        # Attempt to read from Chrome browser (works locally)
+        ydl_opts['cookies_from_browser'] = ('chrome',)
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
+
     filename = os.path.join('downloads', info.get('title') + '.' + info.get('ext'))
     return filename
 
@@ -43,7 +52,7 @@ async def handler(event):
             os.remove(filename)
             await event.respond(f"✅ Uploaded and deleted: {os.path.basename(filename)}")
         except yt_dlp.utils.DownloadError as e:
-            await event.respond(f"❌ Download failed: Invalid URL or unavailable video.\nDetails: {str(e)}")
+            await event.respond(f"❌ Download failed: Invalid URL or video requires login/cookies.\nDetails: {str(e)}")
         except Exception as e:
             await event.respond(f"❌ Something went wrong: {str(e)}")
     else:
