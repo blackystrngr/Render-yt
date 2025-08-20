@@ -2,11 +2,10 @@
 import os
 import asyncio
 import time
-from flask import Flask
 from telethon import TelegramClient, events, Button
 from yt_dlp import YoutubeDL
+from flask import Flask
 
-# --- Flask setup ---
 app = Flask(__name__)
 
 @app.route("/")
@@ -15,40 +14,37 @@ def home():
 
 # --- Telegram bot credentials ---
 API_ID = int(os.environ.get("API_ID"))
-API_HASH = os.environ.get("API_HASH")
+API_HASH = os.environ.get("API_HASH"))
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 bot = TelegramClient("bot_session", API_ID, API_HASH)
 
-# --- Track user URLs ---
-user_choices = {}  # {user_id: url}
+user_choices = {}
 
-# --- Helper: get available formats using yt-dlp API ---
 def get_formats(url):
     with YoutubeDL({'listformats': True, 'cookies': 'cookies.txt'}) as ydl:
         info = ydl.extract_info(url, download=False)
-        formats = [(f['format_id'], f.get('format_note', f['ext'])) for f in info['formats'] if f.get('filesize') or f.get('height')]
+        formats = [(f['format_id'], f.get('format_note', f['ext']))
+                   for f in info['formats'] if f.get('filesize') or f.get('height')]
     return formats
 
-# --- Helper: download video with progress ---
 async def download_video(event, url, format_code):
     if not os.path.exists("downloads"):
         os.makedirs("downloads")
-
-    msg = await event.edit(f"⏳ Starting download in format {format_code}...")
+    msg = await event.respond(f"⏳ Starting download in format {format_code}...")
     filename = ""
     last_update = 0
+    loop = asyncio.get_running_loop()
 
     def progress_hook(d):
         nonlocal last_update, msg, filename
         if d['status'] == 'finished':
             filename = d['filename']
-            asyncio.get_event_loop().create_task(msg.edit(f"✅ Download complete: {os.path.basename(filename)}"))
+            loop.create_task(msg.respond(f"✅ Download complete: {os.path.basename(filename)}"))
         elif d['status'] == 'downloading':
             now = time.time()
-            percent = float(d['_percent_str'].replace('%',''))
-            if now - last_update > 2:  # update every 2 seconds
-                asyncio.get_event_loop().create_task(msg.edit(
+            if now - last_update > 2:
+                loop.create_task(msg.respond(
                     f"⏳ Downloading: {d['_percent_str']} of {d.get('_total_bytes_str','?')} ETA {d.get('_eta_str','?')}"
                 ))
                 last_update = now
@@ -65,13 +61,11 @@ async def download_video(event, url, format_code):
 
     return filename
 
-# --- Message handler ---
 @bot.on(events.NewMessage)
 async def handler(event):
     message_text = event.raw_text.strip()
     sender_id = event.sender_id
 
-    # Only handle YouTube URLs (or /yt <url>)
     if message_text.startswith("/yt "):
         url = message_text[4:].strip()
     elif "youtube.com" in message_text or "youtu.be" in message_text:
@@ -87,7 +81,6 @@ async def handler(event):
             await event.respond("❌ No formats found.")
             return
 
-        # Create buttons for top 10 formats
         buttons = [Button.inline(f"{res}", data=fc) for fc, res in formats[:10]]
         user_choices[sender_id] = url
         await event.respond("Select a quality:", buttons=buttons)
@@ -95,7 +88,6 @@ async def handler(event):
     except Exception as e:
         await event.respond(f"❌ Failed to fetch formats: {str(e)}")
 
-# --- Button callback handler ---
 @bot.on(events.CallbackQuery)
 async def callback(event):
     sender_id = event.sender_id
@@ -107,29 +99,20 @@ async def callback(event):
 
     try:
         filename = await download_video(event, url, format_code)
-
-        await event.edit(f"📤 Uploading {os.path.basename(filename)}...")
+        await event.respond(f"📤 Uploading {os.path.basename(filename)}...")
         await event.respond(file=filename)
         os.remove(filename)
         await event.respond(f"✅ Uploaded and deleted: {os.path.basename(filename)}")
 
     except Exception as e:
-        await event.edit(f"❌ Error: {str(e)}")
+        await event.respond(f"❌ Error: {str(e)}")
 
     finally:
         if sender_id in user_choices:
             del user_choices[sender_id]
 
-# --- Run bot in asyncio loop (no threads!) ---
-async def main():
+# --- Start bot ---
+async def start_bot():
     await bot.start(bot_token=BOT_TOKEN)
     print("✅ Bot connected and ready!")
     await bot.run_until_disconnected()
-
-if __name__ == "__main__":
-    # Run Flask in background thread
-    from threading import Thread
-    Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))).start()
-
-    # Run bot in main asyncio loop
-    asyncio.run(main())
