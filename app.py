@@ -25,7 +25,7 @@ user_choices = {}  # {user_id: url}
 
 # --- Helper: get available formats using yt-dlp API ---
 def get_formats(url):
-    with YoutubeDL({'listformats': True}) as ydl:
+    with YoutubeDL({'listformats': True, 'cookies': 'cookies.txt'}) as ydl:
         info = ydl.extract_info(url, download=False)
         formats = [(f['format_id'], f.get('format_note', f['ext'])) for f in info['formats'] if f.get('filesize') or f.get('height')]
     return formats
@@ -46,6 +46,7 @@ async def download_video(event, url, format_code):
             asyncio.get_event_loop().create_task(msg.edit(f"✅ Download complete: {os.path.basename(filename)}"))
         elif d['status'] == 'downloading':
             now = time.time()
+            percent = float(d['_percent_str'].replace('%',''))
             if now - last_update > 2:  # update every 2 seconds
                 asyncio.get_event_loop().create_task(msg.edit(
                     f"⏳ Downloading: {d['_percent_str']} of {d.get('_total_bytes_str','?')} ETA {d.get('_eta_str','?')}"
@@ -55,6 +56,7 @@ async def download_video(event, url, format_code):
     ydl_opts = {
         'format': format_code,
         'outtmpl': 'downloads/%(title)s.%(ext)s',
+        'cookies': 'cookies.txt',
         'progress_hooks': [progress_hook]
     }
 
@@ -69,11 +71,11 @@ async def handler(event):
     message_text = event.raw_text.strip()
     sender_id = event.sender_id
 
-    # Fix URL issue by stripping /yt prefix
+    # Only handle YouTube URLs (or /yt <url>)
     if message_text.startswith("/yt "):
         url = message_text[4:].strip()
     elif "youtube.com" in message_text or "youtu.be" in message_text:
-        url = message_text.strip()
+        url = message_text
     else:
         await event.respond("hello there")
         return
