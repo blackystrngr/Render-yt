@@ -5,6 +5,7 @@ import threading
 import asyncio
 import subprocess
 import shlex
+import time
 
 app = Flask(__name__)
 
@@ -19,6 +20,9 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 bot = TelegramClient("bot_session", API_ID, API_HASH)
 
+# --- Track user choices ---
+user_choices = {}  # {user_id: url}
+
 # --- Helper: get available formats ---
 def get_formats(url):
     cmd = f"yt-dlp --cookies cookies.txt --list-formats {shlex.quote(url)}"
@@ -27,17 +31,16 @@ def get_formats(url):
         raise Exception(result.stderr)
     formats = []
     for line in result.stdout.splitlines():
-        if line.strip().startswith("format code"):
+        if line.strip().startswith("format code") or not line.strip():
             continue
-        if line.strip() and line[0].isdigit():
-            parts = line.split()
-            format_code = parts[0]
-            resolution = parts[1] if len(parts) > 1 else format_code
-            formats.append((format_code, resolution))
+        parts = line.split()
+        format_code = parts[0]
+        resolution = parts[1] if len(parts) > 1 else format_code
+        formats.append((format_code, resolution))
     return formats
 
-# --- Helper: download video in specific format ---
-def download_video(url, format_code):
+# --- Helper: download video with throttled progress ---
+async def download_video_with_progress(event, url, format_code):
     if not os.path.exists("downloads"):
         os.makedirs("downloads")
     output_template = "downloads/%(title)s.%(ext)s"
@@ -48,21 +51,29 @@ def download_video(url, format_code):
         url
     ]
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+    last_update = 0
+    msg = await event.edit(f"⏳ Starting download in format {format_code}...")
     for line in process.stdout:
-        yield line  # streaming download progress
+        now = time.time()
+        if "Downloading" in line or "ETA" in line:
+            if now - last_update > 2:  # update every 2 seconds
+                try:
+                    await msg.edit(f"⏳ {line.strip()}")
+                except:
+                    pass
+                last_update = now
     process.wait()
     if process.returncode != 0:
         raise Exception("Download failed.")
-    # find downloaded file
+    # get downloaded file
     files = os.listdir("downloads")
     if files:
         return os.path.join("downloads", files[0])
     else:
         raise Exception("Downloaded file not found.")
 
-# --- Event handler ---
-user_choices = {}  # track which user chose which URL
-
+# --- Event handler for /yt command ---
 @bot.on(events.NewMessage)
 async def handler(event):
     message_text = event.raw_text
@@ -74,7 +85,8 @@ async def handler(event):
             if not formats:
                 await event.respond("❌ No formats found.")
                 return
-            buttons = [Button.inline(f"{res}", data=fc) for fc, res in formats[:10]]  # limit 10 choices
+            # Create inline buttons for top 10 formats
+            buttons = [Button.inline(f"{res}", data=fc) for fc, res in formats[:10]]
             user_choices[event.sender_id] = url
             await event.respond("Select a quality:", buttons=buttons)
         except Exception as e:
@@ -82,7 +94,7 @@ async def handler(event):
     else:
         await event.respond("hello there")
 
-# --- Button handler ---
+# --- Button handler for quality selection ---
 @bot.on(events.CallbackQuery)
 async def callback(event):
     format_code = event.data.decode()
@@ -91,21 +103,13 @@ async def callback(event):
     if not url:
         await event.answer("❌ No URL found. Send /yt <url> first.")
         return
-    await event.edit(f"⏳ Downloading in format {format_code}...")
     try:
-        # Stream download progress
-        for line in download_video(url, format_code):
-            if "Downloading" in line or "ETA" in line:
-                await event.edit(f"⏳ {line.strip()}")
-        # Send the file
-        files = os.listdir("downloads")
-        if files:
-            filename = os.path.join("downloads", files[0])
-            await event.respond(file=filename)
-            os.remove(filename)
-            await event.respond(f"✅ Uploaded and deleted: {os.path.basename(filename)}")
-        else:
-            await event.respond("❌ Downloaded file not found.")
+        filename = await download_video_with_progress(event, url, format_code)
+        # Upload video
+        await event.edit(f"📤 Uploading {os.path.basename(filename)}...")
+        await event.respond(file=filename)
+        os.remove(filename)
+        await event.respond(f"✅ Uploaded and deleted: {os.path.basename(filename)}")
     except Exception as e:
         await event.edit(f"❌ Error: {str(e)}")
     finally:
