@@ -49,7 +49,9 @@ def handle_message(update: Update, context: CallbackContext) -> None:
                 with open(video_path, 'rb') as video_file:
                     update.message.reply_video(video_file)
 
-            os.remove(video_path)  # Clean up the downloaded file
+            # Clean up the downloaded file after upload
+            os.remove(video_path)
+            logger.info(f"Deleted video file: {video_path}")
 
         except Exception as e:
             update.message.reply_text(f"An error occurred: {e}")
