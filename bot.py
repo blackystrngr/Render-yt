@@ -24,7 +24,7 @@ bot = TelegramClient("bot_session", API_ID, API_HASH)
 
 # --- Track user URLs and recent messages ---
 user_choices = {}       # {user_id: url}
-recent_messages = set() # {message_id}
+recent_messages = set() # {chat_id:message_id}
 
 # --- Helper: get available formats using yt-dlp Python API ---
 def get_formats(url):
@@ -96,9 +96,10 @@ async def handler(event):
     if not event.is_private or event.out or event.sender.bot:
         return
 
-    if event.id in recent_messages:
+    message_key = f"{event.chat_id}:{event.message.id}"
+    if message_key in recent_messages:
         return
-    recent_messages.add(event.id)
+    recent_messages.add(message_key)
     if len(recent_messages) > 1000:
         recent_messages.clear()
 
