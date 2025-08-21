@@ -4,7 +4,6 @@ import time
 import subprocess
 from flask import Flask
 from telethon import TelegramClient, events, Button
-from yt_dlp import YoutubeDL
 from threading import Thread
 
 # --- Flask setup ---
@@ -26,25 +25,32 @@ bot = TelegramClient("bot_session", API_ID, API_HASH)
 user_choices = {}       # {user_id: url}
 recent_messages = set() # {chat_id:message_id}
 
-# --- Helper: get available formats using yt-dlp Python API ---
+# --- Helper: get available formats using subprocess ---
 def get_formats(url):
     try:
-        ydl_opts = {
-            'listformats': True,
-            'cookies': 'cookies.txt',
-            'quiet': True,
-            'skip_download': True
-        }
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            formats = [
-                (f['format_id'], f.get('format_note', f['ext']))
-                for f in info['formats']
-                if f.get('filesize') or f.get('height')
-            ]
+        command = [
+            "yt-dlp",
+            "--cookies", "cookies.txt",
+            "-F", url
+        ]
+        result = subprocess.run(command, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print(f"Error fetching formats:\n{result.stderr}")
+            return []
+
+        lines = result.stdout.splitlines()
+        formats = []
+        for line in lines:
+            if line.strip().startswith(tuple("0123456789")):
+                parts = line.split()
+                format_id = parts[0]
+                resolution = " ".join(parts[1:])
+                formats.append((format_id, resolution))
+
         return formats
     except Exception as e:
-        print(f"Error fetching formats: {e}")
+        print(f"Exception in get_formats: {e}")
         return []
 
 # --- Helper: download video using subprocess ---
