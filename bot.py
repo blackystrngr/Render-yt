@@ -170,6 +170,6 @@ def start_bot():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(bot_main())
 
-# --- Start bot when Gunicorn loads this file ---
-if __name__ != "__main__":
+# --- Start bot safely under Gunicorn ---
+if os.environ.get("RUN_MAIN") == "true":
     Thread(target=start_bot).start()
