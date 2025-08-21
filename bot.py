@@ -39,21 +39,20 @@ def get_formats(url):
             print(f"Error fetching formats:\n{result.stderr}")
             return []
 
-        lines = result.stdout.splitlines()
         formats = []
-        for line in lines:
-            if line.strip().startswith(tuple("0123456789")):
-                parts = line.split()
+        for line in result.stdout.splitlines():
+            if line.strip() and line.strip()[0].isdigit():
+                parts = line.split(None, 1)
                 format_id = parts[0]
-                resolution = " ".join(parts[1:])
-                formats.append((format_id, resolution))
+                description = parts[1] if len(parts) > 1 else "Unknown"
+                formats.append((format_id, description))
 
         return formats
     except Exception as e:
         print(f"Exception in get_formats: {e}")
         return []
 
-# --- Helper: download video using subprocess ---
+# --- Helper: download video with live progress ---
 async def download_video(event, url, format_code):
     if not os.path.exists("downloads"):
         os.makedirs("downloads")
@@ -62,39 +61,46 @@ async def download_video(event, url, format_code):
     output_template = f"downloads/%(title)s_{timestamp}.%(ext)s"
     msg = await event.edit(f"⏳ Starting download in format {format_code}...")
 
-    try:
-        command = [
-            "yt-dlp",
-            "--cookies", "cookies.txt",
-            "-f", format_code,
-            "-o", output_template,
-            url
-        ]
+    command = [
+        "yt-dlp",
+        "--cookies", "cookies.txt",
+        "-f", format_code,
+        "-o", output_template,
+        url
+    ]
 
-        result = subprocess.run(command, capture_output=True, text=True)
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
-        if result.returncode != 0:
-            await event.edit(f"❌ Download failed:\n{result.stderr}")
-            return None
+    filename = None
+    last_update = 0
 
-        # Find the most recent file in downloads
-        files = sorted(
-            os.listdir("downloads"),
-            key=lambda f: os.path.getmtime(os.path.join("downloads", f)),
-            reverse=True
-        )
-        filename = os.path.join("downloads", files[0]) if files else None
+    while True:
+        line = process.stdout.readline()
+        if not line:
+            break
 
-        if filename:
-            await event.edit(f"✅ Download complete: {os.path.basename(filename)}")
-            return filename
-        else:
-            await event.edit("❌ Could not locate downloaded file.")
-            return None
+        if "Destination:" in line:
+            filename = line.split("Destination:")[1].strip()
 
-    except Exception as e:
-        await event.edit(f"❌ Error: {str(e)}")
+        if "[download]" in line and "%" in line:
+            parts = line.strip().split()
+            for part in parts:
+                if "%" in part:
+                    percent = part
+                    now = time.time()
+                    if now - last_update > 2:
+                        await msg.edit(f"📥 Downloading... {percent}")
+                        last_update = now
+                    break
+
+    process.wait()
+
+    if process.returncode != 0:
+        await msg.edit("❌ Download failed.")
         return None
+
+    await msg.edit(f"✅ Download complete: {os.path.basename(filename)}")
+    return filename
 
 # --- Message handler ---
 @bot.on(events.NewMessage(incoming=True))
@@ -146,8 +152,8 @@ async def callback(event):
         if filename:
             await event.edit(f"📤 Uploading {os.path.basename(filename)}...")
             await event.respond(file=filename)
+            await event.edit("✅ Upload complete: 100%")
             os.remove(filename)
-            await event.respond(f"✅ Uploaded and deleted: {os.path.basename(filename)}")
     except Exception as e:
         await event.edit(f"❌ Error: {str(e)}")
     finally:
