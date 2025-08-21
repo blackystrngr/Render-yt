@@ -6,40 +6,41 @@ from threading import Thread
 from flask import Flask
 from telethon import TelegramClient, events, Button
 
-# 1. Flask health-check
+# 1) Flask health-check
 app = Flask(__name__)
 
 @app.route("/")
 def home():
     return "✅ Bot is running!"
 
-# 2. Telegram creds & client
-API_ID    = int(os.environ["API_ID"])
-API_HASH  = os.environ["API_HASH"]
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-SESSION   = "bot_session"   # telethon will read/write bot_session.session
+# 2) Credentials & session
+API_ID     = int(os.environ["API_ID"])
+API_HASH   = os.environ["API_HASH"]
+BOT_TOKEN  = os.environ["BOT_TOKEN"]
+SESSION    = "bot_session"               # Telethon writes bot_session.session
+COOKIES    = os.environ.get("COOKIES_FILE", "cookies.txt")
 
 bot = TelegramClient(SESSION, API_ID, API_HASH)
 
-# 3. Helper functions
+# 3) Helpers
 def get_title(url):
     try:
-        out = subprocess.run(
-            ["yt-dlp", "--cookies", "cookies.txt", "--print", "%(title)s", url],
+        res = subprocess.run(
+            ["yt-dlp", "--cookies", COOKIES, "--print", "%(title)s", url],
             capture_output=True, text=True
         )
-        return out.stdout.strip()
+        return res.stdout.strip() or "Unknown Title"
     except:
         return "Unknown Title"
 
 def get_formats(url):
     try:
-        out = subprocess.run(
-            ["yt-dlp", "--cookies", "cookies.txt", "-F", url],
+        res = subprocess.run(
+            ["yt-dlp", "--cookies", COOKIES, "-F", url],
             capture_output=True, text=True
         )
         fmts = []
-        for line in out.stdout.splitlines():
+        for line in res.stdout.splitlines():
             if line and line[0].isdigit():
                 code, *desc = line.split(None, 1)
                 fmts.append((code, desc[0] if desc else ""))
@@ -50,9 +51,9 @@ def get_formats(url):
 async def download_video(event, url, fmt):
     os.makedirs("downloads", exist_ok=True)
     ts = int(time.time())
-    template = f"downloads/%(title)s_{ts}.%(ext)s"
+    out = f"downloads/%(title)s_{ts}.%(ext)s"
     msg = await event.edit(f"⏳ Downloading format {fmt}...")
-    cmd = ["yt-dlp", "--cookies", "cookies.txt", "-f", fmt, "-o", template, url]
+    cmd = ["yt-dlp", "--cookies", COOKIES, "-f", fmt, "-o", out, url]
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     filename, last = None, time.time()
@@ -75,9 +76,9 @@ async def download_video(event, url, fmt):
     await msg.edit("✅ Download complete.")
     return filename
 
-# 4. Handlers
+# 4) Handlers
 user_choices = {}
-recent_msgs = set()
+seen = set()
 
 @bot.on(events.NewMessage(incoming=True))
 async def on_message(event):
@@ -85,11 +86,11 @@ async def on_message(event):
         return
 
     key = f"{event.chat_id}:{event.id}"
-    if key in recent_msgs:
+    if key in seen:
         return
-    recent_msgs.add(key)
-    if len(recent_msgs) > 1000:
-        recent_msgs.clear()
+    seen.add(key)
+    if len(seen) > 1000:
+        seen.clear()
 
     text, uid = event.raw_text.strip(), event.sender_id
     if text.startswith("/yt "):
@@ -99,38 +100,56 @@ async def on_message(event):
     else:
         return await event.respond("👋 Send a YouTube link to begin.")
 
-    title, fmts = get_title(url), get_formats(url)
+    # show loading
+    msg = await event.respond("🔎 Fetching video info...")
+
+    title = get_title(url)
+    fmts  = get_formats(url)
     if not fmts:
-        return await event.respond("❌ No formats found.")
+        return await msg.edit("❌ No formats found.")
 
     buttons = [Button.inline(f"{c} | {d}", data=c) for c, d in fmts[:10]]
     user_choices[uid] = url
-    await event.respond(f"🎬 *{title}*\nChoose a format:", buttons=buttons)
+    await msg.edit(f"🎬 {title}\nChoose a format:", buttons=buttons)
 
 @bot.on(events.CallbackQuery)
-async def on_callback(event):
+async def on_format(event):
     uid, fmt = event.sender_id, event.data.decode()
     url = user_choices.get(uid)
     if not url:
         return await event.answer("❌ No URL found.")
 
-    fn = await download_video(event, url, fmt)
-    if fn:
-        await event.respond(f"📤 Uploading {os.path.basename(fn)}...")
-        await event.respond(file=fn)
-        await asyncio.sleep(1)
-        await event.respond("✅ Upload complete.")
-        try:
-            os.remove(fn)
-            await event.respond("🧹 File deleted.")
-        except Exception as e:
-            await event.respond(f"⚠️ Could not delete file: {e}")
+    # 1) Download
+    filepath = await download_video(event, url, fmt)
+    if not filepath:
+        user_choices.pop(uid, None)
+        return
+
+    # 2) Upload with progress
+    upload_msg = await event.respond("📤 Uploading: 0.0%")
+
+    def progress(cur, total):
+        pct = cur * 100 / total if total else 0
+        # schedule async edit on Telethon's loop
+        upload_msg.client.loop.create_task(
+            upload_msg.edit(f"📤 Uploading: {pct:.1f}%")
+        )
+
+    # send_file uses progress callback
+    await bot.send_file(event.chat_id, filepath, progress_callback=progress)
+
+    # finalize
+    await upload_msg.edit("✅ Upload complete.")
+    try:
+        os.remove(filepath)
+        await event.respond("🧹 File deleted.")
+    except Exception as e:
+        await event.respond(f"⚠️ Could not delete file: {e}")
 
     user_choices.pop(uid, None)
 
-# 5. Bot startup
+# 5) Startup
 async def bot_loop():
-    # Always use bot.start(bot_token), which loads or creates the session
     await bot.start(bot_token=BOT_TOKEN)
     print("✅ Bot is live!")
     await bot.run_until_disconnected()
@@ -140,5 +159,4 @@ def start_bot():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(bot_loop())
 
-# 6. Spin up the bot thread on import
 Thread(target=start_bot, daemon=True).start()
