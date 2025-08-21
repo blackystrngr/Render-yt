@@ -28,7 +28,13 @@ recent_messages = set() # {message_id}
 # --- Helper: get available formats using yt-dlp ---
 def get_formats(url):
     try:
-        with YoutubeDL({'listformats': True, 'cookies': 'cookies.txt'}) as ydl:
+        ydl_opts = {
+            'listformats': True,
+            'cookies': 'cookies.txt',
+            'quiet': True,
+            'skip_download': True
+        }
+        with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             formats = [
                 (f['format_id'], f.get('format_note', f['ext']))
@@ -71,7 +77,8 @@ async def download_video(event, url, format_code):
         'format': format_code,
         'outtmpl': f'downloads/%(title)s_{int(time.time())}.%(ext)s',
         'cookies': 'cookies.txt',
-        'progress_hooks': [progress_hook]
+        'progress_hooks': [progress_hook],
+        'quiet': True
     }
 
     with YoutubeDL(ydl_opts) as ydl:
@@ -108,7 +115,7 @@ async def handler(event):
         await event.respond("❌ No formats found.")
         return
 
-    buttons = [Button.inline(f"{res}", data=fc) for fc, res in formats[:10]]
+    buttons = [Button.inline(f"🎞️ {res}", data=fc) for fc, res in formats[:10]]
     user_choices[sender_id] = url
     await event.respond("Select a quality:", buttons=buttons)
 
