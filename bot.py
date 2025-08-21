@@ -25,20 +25,25 @@ bot = TelegramClient("bot_session", API_ID, API_HASH)
 user_choices = {}       # {user_id: url}
 recent_messages = set() # {chat_id:message_id}
 
-# --- Helper: get available formats using subprocess ---
+# --- Helper: get video title ---
+def get_title(url):
+    try:
+        result = subprocess.run(
+            ["yt-dlp", "--cookies", "cookies.txt", "--print", "%(title)s", url],
+            capture_output=True, text=True
+        )
+        return result.stdout.strip()
+    except Exception as e:
+        print(f"Error getting title: {e}")
+        return "Unknown Title"
+
+# --- Helper: get available formats ---
 def get_formats(url):
     try:
-        command = [
-            "yt-dlp",
-            "--cookies", "cookies.txt",
-            "-F", url
-        ]
-        result = subprocess.run(command, capture_output=True, text=True)
-
-        if result.returncode != 0:
-            print(f"Error fetching formats:\n{result.stderr}")
-            return []
-
+        result = subprocess.run(
+            ["yt-dlp", "--cookies", "cookies.txt", "-F", url],
+            capture_output=True, text=True
+        )
         formats = []
         for line in result.stdout.splitlines():
             if line.strip() and line.strip()[0].isdigit():
@@ -46,13 +51,12 @@ def get_formats(url):
                 format_id = parts[0]
                 description = parts[1] if len(parts) > 1 else "Unknown"
                 formats.append((format_id, description))
-
         return formats
     except Exception as e:
-        print(f"Exception in get_formats: {e}")
+        print(f"Error getting formats: {e}")
         return []
 
-# --- Helper: download video with live progress ---
+# --- Helper: download video with progress ---
 async def download_video(event, url, format_code):
     if not os.path.exists("downloads"):
         os.makedirs("downloads")
@@ -126,15 +130,15 @@ async def handler(event):
         await event.respond("👋 Hello there! Send me a YouTube link to get started.")
         return
 
-    await event.respond("⏳ Fetching available qualities...")
+    title = get_title(url)
     formats = get_formats(url)
     if not formats:
         await event.respond("❌ No formats found.")
         return
 
-    buttons = [Button.inline(f"🎞️ {res}", data=fc) for fc, res in formats[:10]]
+    buttons = [Button.inline(f"{fc} | {desc}", data=fc) for fc, desc in formats[:10]]
     user_choices[sender_id] = url
-    await event.respond("Select a quality:", buttons=buttons)
+    await event.respond(f"🎬 *{title}*\nSelect a quality:", buttons=buttons)
 
 # --- Button callback handler ---
 @bot.on(events.CallbackQuery)
@@ -153,7 +157,17 @@ async def callback(event):
             await event.edit(f"📤 Uploading {os.path.basename(filename)}...")
             await event.respond(file=filename)
             await event.edit("✅ Upload complete: 100%")
-            os.remove(filename)
+
+            # Delete file after upload
+            try:
+                if os.path.exists(filename):
+                    os.remove(filename)
+                    await event.respond(f"🧹 File deleted from server: {os.path.basename(filename)}")
+                else:
+                    await event.respond("⚠️ File not found for deletion.")
+            except Exception as e:
+                await event.respond(f"⚠️ Could not delete file: {str(e)}")
+
     except Exception as e:
         await event.edit(f"❌ Error: {str(e)}")
     finally:
