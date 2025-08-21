@@ -8,5 +8,4 @@ app = Flask(__name__)
 def index():
     return "Bot is running!"
 
-# Start the bot in a separate thread
 threading.Thread(target=run_bot, daemon=True).start()
