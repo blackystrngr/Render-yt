@@ -23,6 +23,7 @@ bot = TelegramClient("bot_session", API_ID, API_HASH)
 
 # --- Track user URLs ---
 user_choices = {}  # {user_id: url}
+user_last_seen = {}  # {user_id: timestamp}
 
 # --- Helper: get available formats using yt-dlp ---
 def get_formats(url):
@@ -79,28 +80,36 @@ async def download_video(event, url, format_code):
     return filename
 
 # --- Message handler ---
-@bot.on(events.NewMessage)
+@bot.on(events.NewMessage(incoming=True))
 async def handler(event):
-    message_text = event.raw_text.strip()
-    sender_id = event.sender_id
+    if event.is_private and not event.out:
+        sender_id = event.sender_id
+        now = time.time()
 
-    if message_text.startswith("/yt "):
-        url = message_text[4:].strip()
-    elif "youtube.com" in message_text or "youtu.be" in message_text:
-        url = message_text
-    else:
-        await event.respond("👋 Hello there! Send me a YouTube link to get started.")
-        return
+        # Cooldown: 10 seconds
+        if sender_id in user_last_seen and now - user_last_seen[sender_id] < 10:
+            return
+        user_last_seen[sender_id] = now
 
-    await event.respond("⏳ Fetching available qualities...")
-    formats = get_formats(url)
-    if not formats:
-        await event.respond("❌ No formats found.")
-        return
+        message_text = event.raw_text.strip()
 
-    buttons = [Button.inline(f"{res}", data=fc) for fc, res in formats[:10]]
-    user_choices[sender_id] = url
-    await event.respond("Select a quality:", buttons=buttons)
+        if message_text.startswith("/yt "):
+            url = message_text[4:].strip()
+        elif "youtube.com" in message_text or "youtu.be" in message_text:
+            url = message_text
+        else:
+            await event.respond("👋 Hello there! Send me a YouTube link to get started.")
+            return
+
+        await event.respond("⏳ Fetching available qualities...")
+        formats = get_formats(url)
+        if not formats:
+            await event.respond("❌ No formats found.")
+            return
+
+        buttons = [Button.inline(f"{res}", data=fc) for fc, res in formats[:10]]
+        user_choices[sender_id] = url
+        await event.respond("Select a quality:", buttons=buttons)
 
 # --- Button callback handler ---
 @bot.on(events.CallbackQuery)
