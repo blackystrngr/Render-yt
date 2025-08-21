@@ -1,6 +1,7 @@
 import os
 import asyncio
 import time
+import subprocess
 from flask import Flask
 from telethon import TelegramClient, events, Button
 from yt_dlp import YoutubeDL
@@ -25,7 +26,7 @@ bot = TelegramClient("bot_session", API_ID, API_HASH)
 user_choices = {}       # {user_id: url}
 recent_messages = set() # {message_id}
 
-# --- Helper: get available formats using yt-dlp ---
+# --- Helper: get available formats using yt-dlp Python API ---
 def get_formats(url):
     try:
         ydl_opts = {
@@ -46,45 +47,48 @@ def get_formats(url):
         print(f"Error fetching formats: {e}")
         return []
 
-# --- Helper: download video with progress ---
+# --- Helper: download video using subprocess ---
 async def download_video(event, url, format_code):
     if not os.path.exists("downloads"):
         os.makedirs("downloads")
 
+    timestamp = int(time.time())
+    output_template = f"downloads/%(title)s_{timestamp}.%(ext)s"
     msg = await event.edit(f"⏳ Starting download in format {format_code}...")
-    filename = ""
-    last_update = 0
 
-    def progress_hook(d):
-        nonlocal last_update, msg, filename
-        if d['status'] == 'finished':
-            filename = d['filename']
-            asyncio.get_event_loop().create_task(
-                msg.edit(f"✅ Download complete: {os.path.basename(filename)}")
-            )
-        elif d['status'] == 'downloading':
-            now = time.time()
-            if now - last_update > 2:
-                percent = d.get('_percent_str', '?')
-                total = d.get('_total_bytes_str', '?')
-                eta = d.get('_eta_str', '?')
-                asyncio.get_event_loop().create_task(
-                    msg.edit(f"⏳ Downloading: {percent} of {total} ETA {eta}")
-                )
-                last_update = now
+    try:
+        command = [
+            "yt-dlp",
+            "--cookies", "cookies.txt",
+            "-f", format_code,
+            "-o", output_template,
+            url
+        ]
 
-    ydl_opts = {
-        'format': format_code,
-        'outtmpl': f'downloads/%(title)s_{int(time.time())}.%(ext)s',
-        'cookies': 'cookies.txt',
-        'progress_hooks': [progress_hook],
-        'quiet': True
-    }
+        result = subprocess.run(command, capture_output=True, text=True)
 
-    with YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+        if result.returncode != 0:
+            await event.edit(f"❌ Download failed:\n{result.stderr}")
+            return None
 
-    return filename
+        # Find the most recent file in downloads
+        files = sorted(
+            os.listdir("downloads"),
+            key=lambda f: os.path.getmtime(os.path.join("downloads", f)),
+            reverse=True
+        )
+        filename = os.path.join("downloads", files[0]) if files else None
+
+        if filename:
+            await event.edit(f"✅ Download complete: {os.path.basename(filename)}")
+            return filename
+        else:
+            await event.edit("❌ Could not locate downloaded file.")
+            return None
+
+    except Exception as e:
+        await event.edit(f"❌ Error: {str(e)}")
+        return None
 
 # --- Message handler ---
 @bot.on(events.NewMessage(incoming=True))
@@ -132,10 +136,11 @@ async def callback(event):
 
     try:
         filename = await download_video(event, url, format_code)
-        await event.edit(f"📤 Uploading {os.path.basename(filename)}...")
-        await event.respond(file=filename)
-        os.remove(filename)
-        await event.respond(f"✅ Uploaded and deleted: {os.path.basename(filename)}")
+        if filename:
+            await event.edit(f"📤 Uploading {os.path.basename(filename)}...")
+            await event.respond(file=filename)
+            os.remove(filename)
+            await event.respond(f"✅ Uploaded and deleted: {os.path.basename(filename)}")
     except Exception as e:
         await event.edit(f"❌ Error: {str(e)}")
     finally:
