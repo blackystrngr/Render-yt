@@ -1,4 +1,4 @@
-from flask import Flask
+from fastapi import FastAPI
 from telethon import TelegramClient, events
 import asyncio
 import os
@@ -7,14 +7,14 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-app = Flask(__name__)
-loop = asyncio.get_event_loop()
+app = FastAPI()
 client = TelegramClient("bot", API_ID, API_HASH)
 
-@app.route("/")
-def index():
-    return "Bot is running!"
+@app.get("/")
+async def root():
+    return {"status": "Bot is running!"}
 
+@app.on_event("startup")
 async def start_bot():
     await client.start(bot_token=BOT_TOKEN)
 
@@ -22,7 +22,4 @@ async def start_bot():
     async def handler(event):
         await event.respond("hi there")
 
-    await client.run_until_disconnected()
-
-# Schedule the bot to run in the background
-loop.create_task(start_bot())
+    asyncio.create_task(client.run_until_disconnected())
