@@ -2,174 +2,155 @@ import os
 import time
 import asyncio
 import subprocess
+from threading import Thread
 from flask import Flask
 from telethon import TelegramClient, events, Button
-from threading import Thread
 
-# --- Auto-clear Telethon session (optional via env) ---
-if os.getenv("CLEAR_SESSION", "false").lower() == "true":
-    for file in os.listdir():
-        if file.startswith("bot_session") and file.endswith(".session"):
-            try:
-                os.remove(file)
-                print(f"🧹 Removed session file: {file}")
-            except Exception as e:
-                print(f"⚠️ Could not delete {file}: {e}")
-
-# --- Flask setup ---
+# 1. Flask health-check
 app = Flask(__name__)
 
 @app.route("/")
 def home():
     return "✅ Bot is running!"
 
-# --- Telegram credentials ---
-API_ID = int(os.environ.get("API_ID"))
-API_HASH = os.environ.get("API_HASH")
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+# 2. Telegram credentials & client
+API_ID    = int(os.environ["API_ID"])
+API_HASH  = os.environ["API_HASH"]
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+SESSION   = "bot_session"
 
-bot = TelegramClient("bot_session", API_ID, API_HASH)
+bot = TelegramClient(SESSION, API_ID, API_HASH)
 
-# --- Track user choices ---
-user_choices = {}
-recent_messages = set()
-
-# --- Get video title ---
+# 3. Helper functions
 def get_title(url):
     try:
-        result = subprocess.run(
+        out = subprocess.run(
             ["yt-dlp", "--cookies", "cookies.txt", "--print", "%(title)s", url],
             capture_output=True, text=True
         )
-        return result.stdout.strip()
+        return out.stdout.strip()
     except:
         return "Unknown Title"
 
-# --- Get format list ---
 def get_formats(url):
     try:
-        result = subprocess.run(
+        out = subprocess.run(
             ["yt-dlp", "--cookies", "cookies.txt", "-F", url],
             capture_output=True, text=True
         )
-        formats = []
-        for line in result.stdout.splitlines():
-            if line.strip() and line.strip()[0].isdigit():
-                parts = line.split(None, 1)
-                formats.append((parts[0], parts[1] if len(parts) > 1 else ""))
-        return formats
+        fmts = []
+        for line in out.stdout.splitlines():
+            if line and line[0].isdigit():
+                code, *desc = line.split(None, 1)
+                fmts.append((code, desc[0] if desc else ""))
+        return fmts
     except:
         return []
 
-# --- Download video ---
-async def download_video(event, url, format_code):
-    if not os.path.exists("downloads"):
-        os.makedirs("downloads")
+async def download_video(event, url, fmt):
+    os.makedirs("downloads", exist_ok=True)
+    ts = int(time.time())
+    template = f"downloads/%(title)s_{ts}.%(ext)s"
+    msg = await event.edit(f"⏳ Downloading format {fmt}...")
+    cmd = ["yt-dlp", "--cookies", "cookies.txt", "-f", fmt, "-o", template, url]
 
-    timestamp = int(time.time())
-    output_template = f"downloads/%(title)s_{timestamp}.%(ext)s"
-    msg = await event.edit(f"⏳ Downloading format {format_code}...")
-
-    command = [
-        "yt-dlp", "--cookies", "cookies.txt",
-        "-f", format_code,
-        "-o", output_template,
-        url
-    ]
-
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    filename = None
-    last_update = time.time()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    filename, last = None, time.time()
 
     while True:
-        line = process.stdout.readline()
+        line = proc.stdout.readline()
         if not line:
             break
         if "Destination:" in line:
             filename = line.split("Destination:")[1].strip()
-        if "[download]" in line and "%" in line:
-            if time.time() - last_update > 2:
-                await msg.edit(f"📥 {line.strip()}")
-                last_update = time.time()
+        if "[download]" in line and "%" in line and time.time() - last > 2:
+            await msg.edit(f"📥 {line.strip()}")
+            last = time.time()
 
-    process.wait()
-    if process.returncode != 0 or not filename:
+    proc.wait()
+    if proc.returncode != 0 or not filename:
         await msg.edit("❌ Download failed.")
         return None
 
     await msg.edit("✅ Download complete.")
     return filename
 
-# --- Handle messages ---
+# 4. Event handlers
+user_choices = {}
+recent = set()
+
 @bot.on(events.NewMessage(incoming=True))
-async def handle_message(event):
+async def on_msg(event):
     if not event.is_private or event.out or event.sender.bot:
         return
 
-    key = f"{event.chat_id}:{event.message.id}"
-    if key in recent_messages:
+    key = f"{event.chat_id}:{event.id}"
+    if key in recent:
         return
-    recent_messages.add(key)
-    if len(recent_messages) > 1000:
-        recent_messages.clear()
+    recent.add(key)
+    if len(recent) > 1000:
+        recent.clear()
 
-    text = event.raw_text.strip()
-    sender_id = event.sender_id
-
+    text, uid = event.raw_text.strip(), event.sender_id
     if text.startswith("/yt "):
         url = text[4:].strip()
-    elif "youtube.com" in text or "youtu.be" in text:
+    elif "youtu.be" in text or "youtube.com" in text:
         url = text
     else:
         await event.respond("👋 Send a YouTube link to begin.")
         return
 
-    title = get_title(url)
-    formats = get_formats(url)
-    if not formats:
+    title, fmts = get_title(url), get_formats(url)
+    if not fmts:
         await event.respond("❌ No formats found.")
         return
 
-    buttons = [Button.inline(f"{fc} | {desc}", data=fc) for fc, desc in formats[:10]]
-    user_choices[sender_id] = url
+    buttons = [Button.inline(f"{c} | {d}", data=c) for c, d in fmts[:10]]
+    user_choices[uid] = url
     await event.respond(f"🎬 *{title}*\nChoose a format:", buttons=buttons)
 
-# --- Handle button clicks ---
 @bot.on(events.CallbackQuery)
-async def handle_callback(event):
-    sender_id = event.sender_id
-    format_code = event.data.decode()
-    url = user_choices.get(sender_id)
-
+async def on_click(event):
+    uid, fmt = event.sender_id, event.data.decode()
+    url = user_choices.get(uid)
     if not url:
-        await event.answer("❌ No URL found.")
-        return
+        return await event.answer("❌ No URL found.")
 
-    filename = await download_video(event, url, format_code)
-    if filename:
-        await event.respond(f"📤 Uploading {os.path.basename(filename)}...")
-        await event.respond(file=filename)
-        await asyncio.sleep(1)  # small delay to ensure upload starts
+    fn = await download_video(event, url, fmt)
+    if fn:
+        await event.respond(f"📤 Uploading {os.path.basename(fn)}...")
+        await event.respond(file=fn)
+        await asyncio.sleep(1)
         await event.respond("✅ Upload complete.")
-
         try:
-            os.remove(filename)
+            os.remove(fn)
             await event.respond("🧹 File deleted.")
         except Exception as e:
             await event.respond(f"⚠️ Could not delete file: {e}")
 
-    user_choices.pop(sender_id, None)
+    user_choices.pop(uid, None)
 
-# --- Bot thread starter ---
-async def bot_main():
-    await bot.start(bot_token=BOT_TOKEN)
+# 5. Session reuse and startup
+async def init_bot():
+    sess_file = f"{SESSION}.session"
+    if os.path.exists(sess_file):
+        await bot.connect()
+        print("🔄 Reusing existing session")
+    else:
+        await bot.start(bot_token=BOT_TOKEN)
+        print("🚀 Fresh login, session saved")
+    if not await bot.is_user_authorized():
+        raise RuntimeError("Bot failed to authorize")
+
+async def bot_loop():
+    await init_bot()
     print("✅ Bot is live!")
     await bot.run_until_disconnected()
 
 def start_bot():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(bot_main())
+    loop.run_until_complete(bot_loop())
 
-# --- Start bot when Gunicorn imports app ---
+# 6. Launch bot thread on import
 Thread(target=start_bot, daemon=True).start()
