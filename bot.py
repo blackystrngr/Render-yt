@@ -6,14 +6,15 @@ from flask import Flask
 from telethon import TelegramClient, events, Button
 from threading import Thread
 
-# --- Auto-clear Telethon session ---
-for file in os.listdir():
-    if file.startswith("bot_session") and file.endswith(".session"):
-        try:
-            os.remove(file)
-            print(f"🧹 Removed session file: {file}")
-        except Exception as e:
-            print(f"⚠️ Could not delete {file}: {e}")
+# --- Auto-clear Telethon session (optional via env) ---
+if os.getenv("CLEAR_SESSION", "false").lower() == "true":
+    for file in os.listdir():
+        if file.startswith("bot_session") and file.endswith(".session"):
+            try:
+                os.remove(file)
+                print(f"🧹 Removed session file: {file}")
+            except Exception as e:
+                print(f"⚠️ Could not delete {file}: {e}")
 
 # --- Flask setup ---
 app = Flask(__name__)
@@ -78,6 +79,7 @@ async def download_video(event, url, format_code):
 
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     filename = None
+    last_update = time.time()
 
     while True:
         line = process.stdout.readline()
@@ -86,7 +88,9 @@ async def download_video(event, url, format_code):
         if "Destination:" in line:
             filename = line.split("Destination:")[1].strip()
         if "[download]" in line and "%" in line:
-            await msg.edit(f"📥 {line.strip()}")
+            if time.time() - last_update > 2:
+                await msg.edit(f"📥 {line.strip()}")
+                last_update = time.time()
 
     process.wait()
     if process.returncode != 0 or not filename:
@@ -145,6 +149,7 @@ async def handle_callback(event):
     if filename:
         await event.respond(f"📤 Uploading {os.path.basename(filename)}...")
         await event.respond(file=filename)
+        await asyncio.sleep(1)  # small delay to ensure upload starts
         await event.respond("✅ Upload complete.")
 
         try:
@@ -155,7 +160,7 @@ async def handle_callback(event):
 
     user_choices.pop(sender_id, None)
 
-# --- Start bot thread ---
+# --- Bot thread starter ---
 async def bot_main():
     await bot.start(bot_token=BOT_TOKEN)
     print("✅ Bot is live!")
@@ -166,6 +171,5 @@ def start_bot():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(bot_main())
 
-# --- Gunicorn entry point ---
-if os.environ.get("RUN_MAIN") == "true":
-    Thread(target=start_bot).start()
+# --- Start bot when Gunicorn imports app ---
+Thread(target=start_bot, daemon=True).start()
