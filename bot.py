@@ -21,9 +21,9 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 # --- Telegram client ---
 bot = TelegramClient("bot_session", API_ID, API_HASH)
 
-# --- Track user URLs ---
-user_choices = {}  # {user_id: url}
-user_last_seen = {}  # {user_id: timestamp}
+# --- Track user URLs and recent messages ---
+user_choices = {}       # {user_id: url}
+recent_messages = set() # {message_id}
 
 # --- Helper: get available formats using yt-dlp ---
 def get_formats(url):
@@ -82,34 +82,35 @@ async def download_video(event, url, format_code):
 # --- Message handler ---
 @bot.on(events.NewMessage(incoming=True))
 async def handler(event):
-    if event.is_private and not event.out:
-        sender_id = event.sender_id
-        now = time.time()
+    if not event.is_private or event.out or event.sender.bot:
+        return
 
-        # Cooldown: 10 seconds
-        if sender_id in user_last_seen and now - user_last_seen[sender_id] < 10:
-            return
-        user_last_seen[sender_id] = now
+    if event.id in recent_messages:
+        return
+    recent_messages.add(event.id)
+    if len(recent_messages) > 1000:
+        recent_messages.clear()
 
-        message_text = event.raw_text.strip()
+    message_text = event.raw_text.strip()
+    sender_id = event.sender_id
 
-        if message_text.startswith("/yt "):
-            url = message_text[4:].strip()
-        elif "youtube.com" in message_text or "youtu.be" in message_text:
-            url = message_text
-        else:
-            await event.respond("👋 Hello there! Send me a YouTube link to get started.")
-            return
+    if message_text.startswith("/yt "):
+        url = message_text[4:].strip()
+    elif "youtube.com" in message_text or "youtu.be" in message_text:
+        url = message_text
+    else:
+        await event.respond("👋 Hello there! Send me a YouTube link to get started.")
+        return
 
-        await event.respond("⏳ Fetching available qualities...")
-        formats = get_formats(url)
-        if not formats:
-            await event.respond("❌ No formats found.")
-            return
+    await event.respond("⏳ Fetching available qualities...")
+    formats = get_formats(url)
+    if not formats:
+        await event.respond("❌ No formats found.")
+        return
 
-        buttons = [Button.inline(f"{res}", data=fc) for fc, res in formats[:10]]
-        user_choices[sender_id] = url
-        await event.respond("Select a quality:", buttons=buttons)
+    buttons = [Button.inline(f"{res}", data=fc) for fc, res in formats[:10]]
+    user_choices[sender_id] = url
+    await event.respond("Select a quality:", buttons=buttons)
 
 # --- Button callback handler ---
 @bot.on(events.CallbackQuery)
