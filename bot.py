@@ -1,5 +1,5 @@
 from telethon import TelegramClient, events
-import threading
+import asyncio
 import os
 
 API_ID = int(os.getenv("API_ID"))
@@ -13,4 +13,6 @@ async def handler(event):
     await event.respond("hi there")
 
 def run_bot():
-    client.run_until_disconnected()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(client.run_until_disconnected())
