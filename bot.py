@@ -153,7 +153,17 @@ async def callback(event):
             await event.edit(f"📤 Uploading {os.path.basename(filename)}...")
             await event.respond(file=filename)
             await event.edit("✅ Upload complete: 100%")
-            os.remove(filename)
+
+            # Safely delete the file
+            try:
+                if os.path.exists(filename):
+                    os.remove(filename)
+                    await event.respond(f"🧹 File deleted from server: {os.path.basename(filename)}")
+                else:
+                    await event.respond("⚠️ File not found for deletion.")
+            except Exception as e:
+                await event.respond(f"⚠️ Could not delete file: {str(e)}")
+
     except Exception as e:
         await event.edit(f"❌ Error: {str(e)}")
     finally:
